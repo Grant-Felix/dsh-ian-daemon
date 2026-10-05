@@ -135,17 +135,34 @@ bash tests/ladder.sh
 
 ## 已验证 / 未验证
 
-已在本机验证：插件行激活、Client slot 注册（`conversation.composer.dock` 中 `dsh-ian-daemon`，active）、
-`/status`、`/repair`、写操作鉴权（无头 403、GET 405）、systemd 真启停（`/selftest`）、
-unit 语法（`systemd-analyze --user verify`）、看护阶梯 6 项自测、以及用与 `ExecStart` 相同的命令行
-在备用端口真实启动一个 Harness 实例。
+已在本机（Bazzite 44 / systemd 259 / DSH 0.2.0-rc.2）实测通过：
 
-未验证：桌面会话内的按钮点击与新窗口渲染（无浏览器控制能力，仅确认了 slot 注册与接口行为）；
-真正经历一次“重启 / 开机”后的端到端观感。
+- 插件行激活、Client slot 注册（`conversation.composer.dock` 与 `sidebar.footer.action` 中 `dsh-ian-daemon`，active）；
+- HTTP 接口：`/status`、`/repair`、`/selftest`（真实启停 systemd 用户 unit）、`/mounted`，写操作鉴权（无头 403、GET 405）；
+- unit 语法 `systemd-analyze --user verify`、`systemctl --user is-enabled` = `enabled`、`loginctl` linger；
+- 看护阶梯 **11 组断言全绿**（`bash tests/ladder.sh`）+ 改名迁移测试；
+- 用与 `ExecStart` 完全相同的命令行真实启动过 Harness；
+- **真实重启电脑后自动起来**（开机 15 秒内拉起，无需登录），关机时看护脚本干净退出；
+- 手动「重启」按钮点击后成功由 systemd 接管。
+
+未验证：不同发行版/桌面环境下的表现；非 fnm 安装 node 的路径布局。
+
+## 安装（从 GitHub）
+
+```bash
+dsh plugin --profile web add github:Grant-Felix/dsh-ian-daemon
+```
+
+或在 Harness 的插件管理页里用同一 spec 安装。装好后插件会自动写 unit、enable 并开启 linger；
+当前手动运行的实例要等下次开机或点一次「重启」才由 systemd 接管。
+
+## License
+
+MIT © 2026 Grant-Felix — 见 [LICENSE](LICENSE)。
 
 ## 已知边界
 
 - 服务绑定默认回环地址；`dsh web` 的 GUI 需要带 token 的 URL，见上文日志取法。
 - 服务在开机时若端口被别的实例占用，会按快速失败计数升级——这是设计行为。
 - 只接管自己写过的 unit：若 `~/.config/systemd/user/dsh-ian-daemon.service` 已存在且不含本插件标记，会先备份为 `*.pre-dsh-ian-daemon` 再覆盖。
-- 第三方插件 `dsh-dream-skin` 在重放组合时会报 `duplicate prefix route "/dream-skin/api"`，与本插件无关。
+- `package.json` 里的 `private: true` 只用于避免误发到 npm registry；从 GitHub 安装不受影响，要发布到 npm 时删掉它即可。

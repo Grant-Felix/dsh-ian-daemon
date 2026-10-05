@@ -2,6 +2,7 @@
   "name": "@local/dsh-ian-daemon",
   "version": "0.1.0",
   "private": true,
+  "license": "MIT",
   "description": "systemd autostart, crash/safe-mode self-recovery and a manual 重启 button for DeepSeek Harness",
   "type": "module",
   "main": "index.js",
@@ -21,7 +22,8 @@
     "units/*",
     "locale/*.json",
     "icon.svg",
-    "README.md"
+    "README.md",
+    "LICENSE"
   ],
   "dsh": {
     "bundle": {
