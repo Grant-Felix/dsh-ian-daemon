@@ -1,0 +1,25 @@
+# @local/dsh-ian-daemon — one Host row plus its Client half.
+# Every value below is optional; the defaults are shown. Change them here and
+# the plugin rewrites the supervisor/unit files on the next activation.
+- insert:
+    - id: dsh-ian-daemon
+      name: '@local/dsh-ian-daemon'
+      config:
+        # systemd user units (written to ~/.config/systemd/user)
+        unitName: dsh-ian-daemon.service
+        safeUnitName: dsh-ian-daemon-safemode.service
+        # profile that runs normally, and the pristine profile used as safe mode
+        safeProfile: dsh-safe
+        safeTemplate: web
+        # rapid failures inside failureWindowSeconds before safe mode kicks in
+        failureThreshold: 3
+        failureWindowSeconds: 600
+        # a run must stay up this long to count as healthy
+        healthySeconds: 120
+        # write/enable the units automatically when the plugin activates
+        installOnActivate: true
+        startAtBoot: true
+        # `loginctl enable-linger` so the service also starts without a login
+        enableLinger: true
+        # desktop notification on recovery / safe mode
+        notify: true

@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "Autostart & Guardian",
+    "description": "systemd autostart, crash/corruption self-recovery with a safe mode, and a manual Restart button."
+  }
+}

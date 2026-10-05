@@ -1,0 +1,6 @@
+# 自测/临时目录（由 tests/ 生成，不入库）
+.selftest/
+.migration-test/
+.verify/
+node_modules/
+*.log
