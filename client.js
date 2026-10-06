@@ -94,6 +94,9 @@ window.__ModuleLoader__.load({
         headers: { 'x-dsh-ian-daemon': '1', 'content-type': 'text/plain' },
         body,
         cache: 'no-store',
+        // The page navigates immediately after the final report; keepalive lets
+        // that report outlive the reload instead of being cancelled with it.
+        keepalive: true,
       })
     }
 
@@ -147,9 +150,11 @@ window.__ModuleLoader__.load({
         note: null,
         lastStatus: null,
         running: false,
+        elapsed: 0,
         listeners: new Set(),
         timer: null,
         pollTimer: null,
+        elapsedTimer: null,
       }
 
       const emit = () => {
@@ -186,11 +191,17 @@ window.__ModuleLoader__.load({
 
         const startedAt = now()
         const deadline = startedAt + 120000
+        flow.elapsed = 0
+        if (flow.elapsedTimer) clearInterval(flow.elapsedTimer)
+        flow.elapsedTimer = setInterval(() => {
+          flow.elapsed = Math.round((now() - startedAt) / 1000)
+          emit()
+        }, 1000)
         let answered
         let sawDown = false
         let waitedForReady = false
         while (now() < deadline) {
-          await wait(1200)
+          await wait(500)
           try {
             const next = await status()
             answered = next
@@ -199,6 +210,7 @@ window.__ModuleLoader__.load({
             const decision = decideAfterPoll({ before, next, sawDown })
             if (decision === 'reload') {
               reportEvent('restart:reload', { pid: next?.process?.pid ?? null, sawDown, readyAfterMs: now() - startedAt })
+              if (flow.elapsedTimer) clearInterval(flow.elapsedTimer)
               reload()
               return
             }
@@ -213,6 +225,7 @@ window.__ModuleLoader__.load({
         }
 
         flow.running = false
+        if (flow.elapsedTimer) { clearInterval(flow.elapsedTimer); flow.elapsedTimer = null }
         const ready = answered === undefined ? undefined : answered.ready !== false
         if (answered !== undefined && sawDown && ready) {
           reportEvent('restart:reload-after-timeout', {})
@@ -283,7 +296,7 @@ window.__ModuleLoader__.load({
     }
 
     function labelOf(flow, t) {
-      if (flow.phase === 'busy') return t('busy')
+      if (flow.phase === 'busy') return flow.elapsed > 0 ? `${t('busy')} ${flow.elapsed}s` : t('busy')
       if (flow.phase === 'confirm') return t('confirm')
       if (flow.phase === 'error') return flow.note || t('failed')
       return t('restart')

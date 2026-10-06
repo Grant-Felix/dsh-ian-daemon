@@ -1185,7 +1185,9 @@ export function createManager(ctx, rawConfig) {
             const plan = await planRestart()
             recordEvent('host', 'restart:plan', { action: plan.action, unit: settings.unitName, managed: isManagedByUnit() })
             sendJson(res, 202, { ok: true, plan, note: 'the page will answer again once the new process is up' })
-            setTimeout(() => { performRestart(plan).catch((error) => warn(`restart failed: ${error?.message ?? error}`)) }, 700)
+            // Long enough for the 202 to reach the browser on loopback, short
+            // enough not to be felt: the earlier 700ms was pure added latency.
+            setTimeout(() => { performRestart(plan).catch((error) => warn(`restart failed: ${error?.message ?? error}`)) }, 250)
           } catch (error) {
             sendJson(res, 500, { ok: false, error: String(error?.message ?? error) })
           }
@@ -1226,7 +1228,9 @@ export function createManager(ctx, rawConfig) {
             const plan = restart ? await planRestart() : undefined
             sendJson(res, restart ? 202 : 200, { ok: true, cleared: removed, plan })
             if (plan !== undefined) {
-              setTimeout(() => { performRestart(plan).catch((error) => warn(`restart failed: ${error?.message ?? error}`)) }, 700)
+              // Long enough for the 202 to reach the browser on loopback, short
+            // enough not to be felt: the earlier 700ms was pure added latency.
+            setTimeout(() => { performRestart(plan).catch((error) => warn(`restart failed: ${error?.message ?? error}`)) }, 250)
             }
           } catch (error) {
             sendJson(res, 500, { ok: false, error: String(error?.message ?? error) })
