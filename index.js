@@ -818,9 +818,34 @@ export function createManager(ctx, rawConfig) {
   }
 
   /** Proof, reported by the browser, that the restart control really rendered. */
-  function clientState() {    const raw = readText(join(paths.stateDir, 'client.json'))
+  function clientState() {
+    const raw = readText(join(paths.stateDir, 'client.json'))
     if (raw === undefined || raw.trim() === '') return { mounted: false }
     try { return { mounted: true, ...JSON.parse(raw) } } catch { return { mounted: false } }
+  }
+
+  /** One line per restart-lifecycle step, from both the page and this half. */
+  const CLIENT_EVENTS_FILE = 'client-events.jsonl'
+  const CLIENT_EVENTS_MAX = 200
+
+  function recordEvent(source, event, data) {
+    try {
+      ensureDir(paths.stateDir)
+      const file = join(paths.stateDir, CLIENT_EVENTS_FILE)
+      const line = `${JSON.stringify({ at: new Date().toISOString(), pid: process.pid, source, event, data })}\n`
+      let text = `${readText(file, '') ?? ''}${line}`
+      const lines = text.split('\n').filter((entry) => entry !== '')
+      if (lines.length > CLIENT_EVENTS_MAX) text = `${lines.slice(-CLIENT_EVENTS_MAX).join('\n')}\n`
+      writeFileSync(file, text, 'utf8')
+    } catch { /* diagnostics are best effort */ }
+  }
+
+  function clientEvents(limit = 10) {
+    const text = readText(join(paths.stateDir, CLIENT_EVENTS_FILE), '')
+    const lines = (text ?? '').split('\n').filter((entry) => entry !== '')
+    return lines.slice(-limit).map((line) => {
+      try { return JSON.parse(line) } catch { return { raw: line.slice(0, 200) } }
+    })
   }
 
   function clearSafeMode() {
@@ -879,6 +904,7 @@ export function createManager(ctx, rawConfig) {
   }
 
   async function performRestart(plan) {
+    recordEvent('host', 'restart:perform', { action: plan.action, unit: settings.unitName, managed: isManagedByUnit() })
     if (plan.action === 'systemd') {
       const result = await (async () => {
         const direct = await systemctl(['restart', settings.unitName])
@@ -886,6 +912,7 @@ export function createManager(ctx, rawConfig) {
         const bus = await managerCall('RestartUnit', 'ss', [settings.unitName, 'replace'])
         return { ok: bus.code === 0, via: 'busctl', error: bus.stderr.trim() }
       })()
+      recordEvent('host', 'restart:result', result)
       if (!result.ok) {
         warn(`restart failed (${result.via}): ${result.error || 'unknown error'}`)
         return result
@@ -893,6 +920,7 @@ export function createManager(ctx, rawConfig) {
       return result
     }
     info(`handing over to ${paths.relaunch} (${plan.action})`)
+    recordEvent('host', 'restart:handover', { helper: paths.relaunch })
     const force = setTimeout(() => process.exit(0), 8000)
     force.unref?.()
     process.kill(process.pid, 'SIGTERM')
@@ -992,6 +1020,7 @@ export function createManager(ctx, rawConfig) {
       appArgs: appArgs(),
       supervisor: supervisorState(),
       client: clientState(),
+      clientEvents: clientEvents(),
       health: healthStatus(),
       lastInstall: readJson(join(paths.stateDir, 'install.json')),
       paths,
@@ -1088,11 +1117,32 @@ export function createManager(ctx, rawConfig) {
       },
       {
         kind: 'exact',
+        path: `${ROUTE_PREFIX}/event`,
+        handler: (req, res) => {
+          if (!mutating(req, res)) return
+          let body = ''
+          req.on('data', (chunk) => { if (body.length < 400) body += chunk })
+          req.on('end', () => {
+            const text = String(body)
+            const space = text.indexOf(' ')
+            const event = (space === -1 ? text : text.slice(0, space)).slice(0, 60) || 'unknown'
+            let data
+            if (space !== -1) {
+              try { data = JSON.parse(text.slice(space + 1)) } catch { data = { raw: text.slice(space + 1, 200) } }
+            }
+            recordEvent('client', event, data)
+            sendJson(res, 200, { ok: true })
+          })
+        },
+      },
+      {
+        kind: 'exact',
         path: `${ROUTE_PREFIX}/restart`,
         handler: async (req, res) => {
           if (!mutating(req, res)) return
           try {
             const plan = await planRestart()
+            recordEvent('host', 'restart:plan', { action: plan.action, unit: settings.unitName, managed: isManagedByUnit() })
             sendJson(res, 202, { ok: true, plan, note: 'the page will answer again once the new process is up' })
             setTimeout(() => { performRestart(plan).catch((error) => warn(`restart failed: ${error?.message ?? error}`)) }, 700)
           } catch (error) {

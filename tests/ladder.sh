@@ -192,6 +192,17 @@ else
   echo "  skip (node not on PATH)"
 fi
 
+echo "12. client restart lifecycle (regression: page left dead after a restart)"
+if command -v node >/dev/null 2>&1; then
+  if node "$PLUGIN_DIR/tests/restart-flow.mjs" >"$SCRATCH/restart-flow.log" 2>&1; then
+    check "restart flow test" "passed" "passed"
+  else
+    check "restart flow test" "passed" "failed (see $SCRATCH/restart-flow.log)"
+  fi
+else
+  echo "  skip (node not on PATH)"
+fi
+
 if [ "$FAILED" = "0" ]; then
   echo "all supervisor ladder tests passed"
   rm -rf "$SCRATCH"
