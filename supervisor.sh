@@ -213,8 +213,11 @@ resolve_runtime() {
 
 # --- preflight ---------------------------------------------------------------
 preflight() {
-  local err="$STATE_DIR/preflight.err"
+  local err="$STATE_DIR/preflight.err" started elapsed
+  started="$(date +%s%3N)"
   if "$NODE_BIN" "$DSH_CLI" --profile "$PROFILE" --dump-config >/dev/null 2>"$err"; then
+    elapsed=$(( $(date +%s%3N) - started ))
+    log "preflight ok in ${elapsed}ms"
     [ -f "$BACKUP_DIR/cordis.patch.yml" ] || snapshot_config
     return 0
   fi

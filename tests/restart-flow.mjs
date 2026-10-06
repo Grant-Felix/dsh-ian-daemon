@@ -111,12 +111,45 @@ console.log('4. a server that never comes back ends in the timeout note, not a s
   check('note tells the user to refresh', 'timeout', flowApi.flow.note)
 }
 
-console.log('5. the staleness decision itself')
+console.log('5. the page waits for readiness before reloading (the "stuck page" fix)')
+{
+  const { flowApi, events, state } = harness({
+    statuses: [
+      new Error('refused'),
+      { process: { pid: 700 }, ready: false },
+      { process: { pid: 700 }, ready: false },
+      { process: { pid: 700 }, ready: true },
+    ],
+  })
+  await flowApi.run()
+  check('reloaded once ready', '1', state.reloads)
+  check('the wait was reported', 'true', events.some((e) => e.event === 'restart:waiting-ready'))
+  check('the wait was reported only once', '1', events.filter((e) => e.event === 'restart:waiting-ready').length)
+  const reload = events.find((e) => e.event === 'restart:reload')
+  check('the wait duration is recorded', 'true', typeof reload?.data?.readyAfterMs === 'number')
+}
+
+console.log('6. a server that stays up but never becomes ready is not reloaded into')
+{
+  const { flowApi, events, state } = harness({
+    statuses: [new Error('refused')],
+    onEmpty: () => ({ process: { pid: 700 }, ready: false }),
+  })
+  await flowApi.run()
+  check('no reload', '0', state.reloads)
+  check('it waited for readiness', 'true', events.some((e) => e.event === 'restart:waiting-ready'))
+  check('note says the service is still starting', 'starting', flowApi.flow.note)
+}
+
+console.log('7. the staleness decision itself')
 check('same pid, no outage -> wait', 'wait', decideAfterPoll({ before: 1, next: { process: { pid: 1 } }, sawDown: false }))
 check('pid moved -> reload', 'reload', decideAfterPoll({ before: 1, next: { process: { pid: 2 } }, sawDown: false }))
 check('down then up -> reload', 'reload', decideAfterPoll({ before: 1, next: { process: { pid: 1 } }, sawDown: true }))
 check('still down -> wait', 'wait', decideAfterPoll({ before: 1, next: undefined, sawDown: true }))
 check('unknown before + outage -> reload', 'reload', decideAfterPoll({ before: null, next: { process: { pid: 9 } }, sawDown: true }))
+check('stale but not ready -> keep waiting', 'wait-not-ready', decideAfterPoll({ before: 1, next: { process: { pid: 2 }, ready: false }, sawDown: false }))
+check('stale and ready -> reload', 'reload', decideAfterPoll({ before: 1, next: { process: { pid: 2 }, ready: true }, sawDown: false }))
+check('ready field absent (older host) -> reload', 'reload', decideAfterPoll({ before: 1, next: { process: { pid: 2 } }, sawDown: false }))
 
 if (failed === 0) console.log('restart-flow test passed')
 else console.log('restart-flow test failed')

@@ -297,6 +297,23 @@ export function createManager(ctx, rawConfig) {
     profileDir: join(dshHome, 'profiles', settings.profile),
   }
 
+  /** Resolved by the launcher only after the whole tree mounted: the shell's
+   * `/api` route is registered after that, so a reload before it cannot connect. */
+  let readiness = { ready: false, at: undefined }
+
+  function watchReadiness() {
+    const service = typeof ctx.get === 'function' ? ctx.get('appReady') : undefined
+    if (service === undefined || typeof service.onReady !== 'function') {
+      readiness = { ready: true, at: new Date().toISOString(), absent: true }
+      return
+    }
+    try {
+      service.onReady(() => { readiness = { ready: true, at: new Date().toISOString() } })
+    } catch (error) {
+      readiness = { ready: true, at: new Date().toISOString(), error: String(error?.message ?? error) }
+    }
+  }
+
   const logger = ctx.logger ?? console
   let activated = false
   let disposed = false
@@ -840,6 +857,22 @@ export function createManager(ctx, rawConfig) {
     } catch { /* diagnostics are best effort */ }
   }
 
+  /** At most one heartbeat per 20s: proves the page is still polling. */
+  function recordHeartbeat() {
+    try {
+      const file = join(paths.stateDir, 'client-heartbeat.json')
+      const previous = readJson(file)
+      const last = typeof previous?.at === 'string' ? Date.parse(previous.at) : 0
+      if (Number.isFinite(last) && Date.now() - last < 20000) return
+      ensureDir(paths.stateDir)
+      writeFileSync(file, `${JSON.stringify({ at: new Date().toISOString(), pid: process.pid }, null, 2)}\n`, 'utf8')
+    } catch { /* diagnostics are best effort */ }
+  }
+
+  function clientHeartbeat() {
+    return readJson(join(paths.stateDir, 'client-heartbeat.json')) ?? null
+  }
+
   function clientEvents(limit = 10) {
     const text = readText(join(paths.stateDir, CLIENT_EVENTS_FILE), '')
     const lines = (text ?? '').split('\n').filter((entry) => entry !== '')
@@ -1020,7 +1053,10 @@ export function createManager(ctx, rawConfig) {
       appArgs: appArgs(),
       supervisor: supervisorState(),
       client: clientState(),
+      clientHeartbeat: clientHeartbeat(),
       clientEvents: clientEvents(),
+      ready: readiness.ready,
+      readyAt: readiness.at,
       health: healthStatus(),
       lastInstall: readJson(join(paths.stateDir, 'install.json')),
       paths,
@@ -1084,7 +1120,12 @@ export function createManager(ctx, rawConfig) {
         kind: 'exact',
         path: `${ROUTE_PREFIX}/status`,
         handler: async (req, res) => {
-          try { sendJson(res, 200, await status()) } catch (error) { sendJson(res, 500, { ok: false, error: String(error?.message ?? error) }) }
+          try {
+            // The page polls with hb=1; curl/agents do not, so only real pages
+            // move the liveness timestamp.
+            if (query(req).searchParams.get('hb') === '1') recordHeartbeat()
+            sendJson(res, 200, await status())
+          } catch (error) { sendJson(res, 500, { ok: false, error: String(error?.message ?? error) }) }
         },
       },
       {
@@ -1212,6 +1253,7 @@ export function createManager(ctx, rawConfig) {
   async function activate() {
     if (activated || disposed) return
     activated = true
+    watchReadiness()
     if (!settings.installOnActivate) {
       info('activation: installOnActivate=false, only reporting status')
       return

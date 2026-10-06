@@ -48,6 +48,8 @@
   组件清理绝不能把已经在飞的重启流程掐死。流程规则是「证明页面已经过期才刷新」——
   POST 抛错（服务端先死、响应丢失）不再放弃；服务端 pid 变了、或观测到「断开又回来」就刷新页面；
   一直没起来则给出提示让你手动刷新。每一步都会回执到 `/dsh-ian-daemon/event`。
+  刷新前会等 harness 自己报告**已就绪**（`appReady`）：在此之前页面真正需要的 `/api` 传输通道还没注册，
+  过早刷新会刷进一个连不上后端的壳（这正是 2026-10-06「卡住」的原因）。
 - **状态与日志接口**（仅本机可访问，写操作需带 `x-dsh-ian-daemon: 1` 头）：
 
   ```
@@ -62,6 +64,8 @@
   POST /dsh-ian-daemon/event        # 页面回执（重启生命周期/UI 崩溃），写入 state/client-events.jsonl
   ```
 
+  `/status` 里的 `ready` / `readyAt` 表示 harness 是否已完成启动审计，`clientHeartbeat` 是页面轮询心跳
+  （最多 20 秒记一次，用来判断页面是否还活着，curl 不会污染它）。
   `/status` 里的 `health` 是自检结论：解析**生成的**脚本，报告其中烘焙的 node/dsh 路径是否仍然存在
   （`health.ok=false` 说明自启动"看起来装好了"但实际起不来）；`lastInstall` 是最近一次安装结果。
 
@@ -145,6 +149,14 @@ bash tests/ladder.sh
 （而服务端先死、响应丢失恰恰是常态），既不再轮询也永不刷新；② 流程挂在 dock 里的组件上，
 服务端一断会话级 slot 塌掉、组件 unmount，`cleanup` 就把流程掐死了。现在整个生命周期移到模块级
 （与 React 挂载无关），POST 失败继续观察，并用 `tests/restart-flow.mjs` 的 17 条断言锁住这条回归。
+
+**2026-10-06（第二次）— "点重启后页面卡住"**。`/status` 在本插件挂载时就能应答，但页面真正需要的
+`/api` 传输通道要等整棵树挂载完、`appReady.commit()` 之后才注册（`@deepseek-ai/dsh-api-gateway` 的既定行为）。
+实测那次点击：`restart:click` 00:32:02.618 → `restart:reload` 00:32:06.297，**刷新发生在就绪之前**，
+页面于是刷进一个连不上后端的壳。现在刷新前先等 `ready=true`，期间只投一次 `restart:waiting-ready`，
+等待时长记进 `restart:reload.readyAfterMs`，一直不就绪则提示「服务仍在启动」而不是盲刷；
+同时补回了 `/mounted` 页面存活回执与轮询心跳。另外看护脚本现在会记录 `preflight ok in Nms`，
+便于判断重启耗时到底花在哪。
 
 ## 已验证 / 未验证
 

@@ -40,6 +40,7 @@ window.__ModuleLoader__.load({
       failed: '重启失败',
       timeout: '服务未恢复，请手动刷新',
       noeffect: '重启未生效',
+      starting: '服务仍在启动，请稍后手动刷新',
       safe: '安全模式',
       hint: '重启 DeepSeek Harness',
       hintSafe: '重启 DeepSeek Harness（上次启动进入了安全模式）',
@@ -52,6 +53,7 @@ window.__ModuleLoader__.load({
       failed: 'Restart failed',
       timeout: 'Service did not come back — reload the page',
       noeffect: 'Restart had no effect',
+      starting: 'Service is still starting — reload in a moment',
       safe: 'Safe mode',
       hint: 'Restart DeepSeek Harness',
       hintSafe: 'Restart DeepSeek Harness (the last boot entered safe mode)',
@@ -106,7 +108,7 @@ window.__ModuleLoader__.load({
     }
 
     async function readStatus() {
-      const response = await fetch(`${BASE}/status`, { cache: 'no-store' })
+      const response = await fetch(`${BASE}/status?hb=1`, { cache: 'no-store' })
       if (!response.ok) throw new Error(`status ${response.status}`)
       return await response.json()
     }
@@ -118,9 +120,14 @@ window.__ModuleLoader__.load({
      */
     function decideAfterPoll(state) {
       const { before, next, sawDown } = state
-      if (next !== undefined && before !== null && next?.process?.pid !== before) return 'reload'
-      if (sawDown && next !== undefined) return 'reload'
-      return 'wait'
+      const stale = (next !== undefined && before !== null && next?.process?.pid !== before)
+        || (sawDown && next !== undefined)
+      if (!stale) return 'wait'
+      // /status answers as soon as this plugin mounts, but the route the shell
+      // needs (`/api`) is registered only after `appReady`. Reloading inside that
+      // window lands on a page that cannot connect — the reported "stuck" page.
+      if (next !== undefined && next.ready === false) return 'wait-not-ready'
+      return 'reload'
     }
 
     /** The restart lifecycle. `deps` is injectable so a test can drive it in Node. */
@@ -177,9 +184,11 @@ window.__ModuleLoader__.load({
           reportEvent('restart:post-failed', { message: String(error?.message ?? error) })
         }
 
-        const deadline = now() + 120000
+        const startedAt = now()
+        const deadline = startedAt + 120000
         let answered
         let sawDown = false
+        let waitedForReady = false
         while (now() < deadline) {
           await wait(1200)
           try {
@@ -187,10 +196,15 @@ window.__ModuleLoader__.load({
             answered = next
             flow.lastStatus = next
             emit()
-            if (decideAfterPoll({ before, next, sawDown }) === 'reload') {
-              reportEvent('restart:reload', { pid: next?.process?.pid ?? null, sawDown })
+            const decision = decideAfterPoll({ before, next, sawDown })
+            if (decision === 'reload') {
+              reportEvent('restart:reload', { pid: next?.process?.pid ?? null, sawDown, readyAfterMs: now() - startedAt })
               reload()
               return
+            }
+            if (decision === 'wait-not-ready' && !waitedForReady) {
+              waitedForReady = true
+              reportEvent('restart:waiting-ready', { pid: next?.process?.pid ?? null })
             }
           } catch {
             if (!sawDown) reportEvent('restart:down', {})
@@ -199,13 +213,16 @@ window.__ModuleLoader__.load({
         }
 
         flow.running = false
-        if (answered !== undefined && sawDown) {
+        const ready = answered === undefined ? undefined : answered.ready !== false
+        if (answered !== undefined && sawDown && ready) {
           reportEvent('restart:reload-after-timeout', {})
           reload()
           return
         }
-        reportEvent('restart:timeout', { answered: answered !== undefined })
-        set({ phase: 'error', note: answered === undefined ? translate('timeout') : translate('noeffect') })
+        reportEvent('restart:timeout', { answered: answered !== undefined, ready })
+        if (answered === undefined) set({ phase: 'error', note: translate('timeout') })
+        else if (sawDown && !ready) set({ phase: 'error', note: translate('starting') })
+        else set({ phase: 'error', note: translate('noeffect') })
       }
 
       /** Two-step confirmation, then the restart itself. */
@@ -229,9 +246,15 @@ window.__ModuleLoader__.load({
     let translate = (key) => zh[key] ?? key
     let FLOW = createRestartFlow({ translate })
 
-    function useFlow() {
+    function useFlow(where) {
       const [, bump] = React.useState(0)
       React.useEffect(() => {
+        // Page-liveness beacon: proves the control (and therefore the page)
+        // really came back after a restart.
+        try {
+          const beacon = postJson('/mounted', where)
+          if (beacon && typeof beacon.catch === 'function') beacon.catch(() => {})
+        } catch { /* best effort */ }
         const unsubscribe = FLOW.subscribe(() => bump((n) => n + 1))
         FLOW.ensurePolling()
         return unsubscribe
@@ -278,7 +301,7 @@ window.__ModuleLoader__.load({
     /** Compact control for the composer dock (a flex row under the input). */
     function DockControl(props) {
       const t = props.t
-      const flow = useFlow()
+      const flow = useFlow('dock')
       const safeMode = flow.lastStatus?.supervisor?.mode === 'safe'
       return h('span', { style: { display: 'inline-flex', alignItems: 'center' } },
         h('style', null, CSS),
@@ -301,7 +324,7 @@ window.__ModuleLoader__.load({
     function SidebarControl(props) {
       const t = props.t
       const wide = props.wide !== false
-      const flow = useFlow()
+      const flow = useFlow('sidebar')
       const safeMode = flow.lastStatus?.supervisor?.mode === 'safe'
       return h('span', { style: { display: 'inline-flex', alignItems: 'center', width: wide ? '100%' : undefined } },
         h('style', null, CSS),
